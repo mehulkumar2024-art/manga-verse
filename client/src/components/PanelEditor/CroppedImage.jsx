@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-export default function CroppedImage({ imageUrl, bbox, colorTag, style, className }) {
+export default function CroppedImage({ imageUrl, bbox, colorTag, style, className, children }) {
   const [naturalSize, setNaturalSize] = useState({ w: 800, h: 1100 });
   const [loaded, setLoaded] = useState(false);
 
@@ -48,6 +48,7 @@ export default function CroppedImage({ imageUrl, bbox, colorTag, style, classNam
           {imageUrl ? 'Loading...' : 'No Image'}
         </div>
       )}
+      {children}
     </div>
   );
 }

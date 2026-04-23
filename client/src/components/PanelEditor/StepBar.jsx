@@ -102,18 +102,21 @@ const VOICE_TYPES = [
 export function CharacterStep({
   manifests, characters, panelCharMap,
   onAddCharacter, onUpdateCharacter, onDeleteCharacter,
-  onTagChar, onBack, onNext,
+  onTagRegion, onAddManualRegion, onRemoveRegion, onDetectCharacters, detecting,
+  onBack, onNext,
 }) {
   const [showAddModal, setShowAddModal] = useState(false);
-  const [addDraft, setAddDraft]         = useState({ name:'', voiceType:'male_young', colorTag: CHAR_COLORS[0] });
+  const [addDraft, setAddDraft]         = useState({ name:'', voiceType:'male_young', voiceId:'', colorTag: CHAR_COLORS[0] });
   const [selectedChar, setSelectedChar] = useState(null);
   const [previewPanel, setPreviewPanel] = useState(null);
+  const [isLassoing, setIsLassoing] = useState(false);
+  const [lassoPoints, setLassoPoints] = useState([]);
 
   const handleAdd = async () => {
     if (!addDraft.name.trim()) return;
     await onAddCharacter(addDraft);
     setShowAddModal(false);
-    setAddDraft({ name:'', voiceType:'male_young', colorTag: CHAR_COLORS[characters.length % CHAR_COLORS.length] });
+    setAddDraft({ name:'', voiceType:'male_young', voiceId:'', colorTag: CHAR_COLORS[characters.length % CHAR_COLORS.length] });
   };
 
   // Build panel grid from all confirmed manifests
@@ -121,10 +124,11 @@ export function CharacterStep({
     (m.panels || []).map(p => ({ ...p, pageNumber: m.pageNumber, manifestId: m._id }))
   ).sort((a,b) => a.pageNumber - b.pageNumber || a.readingOrder - b.readingOrder);
 
-  const tagged = allPanels.filter(p => (panelCharMap[p.panelId]||[]).length > 0).length;
+  const totalRegions = allPanels.reduce((acc, p) => acc + (panelCharMap[p.panelId] || []).length, 0);
+  const taggedRegions = allPanels.reduce((acc, p) => acc + (panelCharMap[p.panelId] || []).filter(r => r.characterId).length, 0);
 
   return (
-    <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
+    <div style={{ display:'flex', flex:1, height: '100%', overflow:'hidden' }}>
 
       {/* PANEL GRID */}
       <div style={{ flex:1, overflow:'auto', padding:24, background:'#0d0d0f' }}>
@@ -134,29 +138,37 @@ export function CharacterStep({
           </div>
           <div style={{ fontSize:12, color:'#6b6b7e', marginTop:4 }}>
             Click a panel to tag which characters appear. We use this to automatically assign voices.
-            &nbsp;·&nbsp;<span style={{color:'#2ec97e'}}>{tagged}/{allPanels.length} panels tagged</span>
+            &nbsp;·&nbsp;<span style={{color:'#2ec97e'}}>{taggedRegions}/{totalRegions} regions tagged</span>
           </div>
         </div>
 
         {/* Page groups */}
         {manifests.map(m => (
           <div key={m._id} style={{ marginBottom:32 }}>
-            <div style={{ fontSize:10, color:'#35353f', textTransform:'uppercase', letterSpacing:1, marginBottom:10 }}>
-              Page {m.pageNumber}
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+              <div style={{ fontSize:10, color:'#35353f', textTransform:'uppercase', letterSpacing:1 }}>
+                Page {m.pageNumber}
+              </div>
+              <button 
+                onClick={() => onDetectCharacters(m.pageNumber)} 
+                disabled={detecting}
+                style={{ background:'transparent', color:'var(--accent)', border:'1px solid var(--accent)', padding:'4px 12px', borderRadius:4, fontSize:11, cursor:'pointer' }}
+              >
+                {detecting ? 'Detecting...' : 'Auto-Detect Characters'}
+              </button>
             </div>
             <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
               {(m.panels || []).map(panel => {
-                const chars = (panelCharMap[panel.panelId]||[]).map(id=>characters.find(c=>c._id===id)).filter(Boolean);
+                const regions = panelCharMap[panel.panelId] || [];
                 return (
                   <PanelThumb
                     key={panel.panelId}
                     panel={panel}
                     pageNumber={m.pageNumber}
                     imageUrl={m.imageUrl}
-                    chars={chars}
+                    regions={regions}
                     characters={characters}
-                    panelCharMap={panelCharMap}
-                    onTagChar={onTagChar}
+                    onTagRegion={onTagRegion}
                     selectedChar={selectedChar}
                     onPreview={(p) => setPreviewPanel(p)}
                   />
@@ -198,7 +210,7 @@ export function CharacterStep({
 
         <div style={{ flex:1, overflowY:'auto' }}>
           {characters.map(c => {
-            const count = Object.values(panelCharMap).filter(arr=>arr.includes(c._id)).length;
+            const count = Object.values(panelCharMap).flat().filter(r => r.characterId === c._id).length;
             const color = c.colorTag || CHAR_COLORS[0];
             const isActive = selectedChar === c._id;
             return (
@@ -224,7 +236,7 @@ export function CharacterStep({
                 <div style={{ flex:1 }}>
                   <div style={{ fontSize:13, fontWeight:500, color:'white' }}>{c.name}</div>
                   <div style={{ fontSize:10, color:'#6b6b7e' }}>
-                    {count} panel{count!==1?'s':''} · {VOICE_TYPES.find(v=>v.id===c.voiceType)?.label || c.voiceType}
+                    {count} region{count!==1?'s':''} · Voice {c.voiceId ? `#${c.voiceId}` : c.voiceType}
                   </div>
                 </div>
                 <button
@@ -276,6 +288,17 @@ export function CharacterStep({
                   onChange={e=>setAddDraft(d=>({...d,name:e.target.value}))}
                   onKeyDown={e=>e.key==='Enter'&&handleAdd()}
                   placeholder="e.g. Akira, Unknown 1…"
+                  style={{ width:'100%', padding:'8px 11px', borderRadius:7, background:'#26262f', border:'1px solid #35353f', color:'white', fontSize:13, outline:'none', fontFamily:'DM Sans, sans-serif', boxSizing:'border-box' }}
+                />
+              </div>
+
+              <div style={{ marginBottom:14 }}>
+                <div style={{ fontSize:10, color:'#6b6b7e', marginBottom:6, textTransform:'uppercase', letterSpacing:.5 }}>Voice Number / ID (Optional)</div>
+                <input
+                  value={addDraft.voiceId}
+                  onChange={e=>setAddDraft(d=>({...d,voiceId:e.target.value}))}
+                  onKeyDown={e=>e.key==='Enter'&&handleAdd()}
+                  placeholder="e.g. 1, 2, or specific Voice ID"
                   style={{ width:'100%', padding:'8px 11px', borderRadius:7, background:'#26262f', border:'1px solid #35353f', color:'white', fontSize:13, outline:'none', fontFamily:'DM Sans, sans-serif', boxSizing:'border-box' }}
                 />
               </div>
@@ -337,35 +360,153 @@ export function CharacterStep({
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
                 <div>
                   <div style={{ fontFamily:'Bebas Neue, sans-serif', fontSize:26, color:'white', letterSpacing:1 }}>
-                    Panel #{previewPanel.panel.readingOrder+1}
+                    Manual Character Tagging
                   </div>
-                  <div style={{ fontSize:12, color:'#6b6b7e', marginTop:4 }}>Page {previewPanel.pageNumber}</div>
+                  <div style={{ fontSize:12, color:'#6b6b7e', marginTop:4 }}>
+                    Click and drag to lasso a character
+                  </div>
                 </div>
                 <button onClick={()=>setPreviewPanel(null)} style={{ background:'none', border:'none', color:'#e8341a', fontSize:32, cursor:'pointer', padding:0, lineHeight:1, width:40, height:40, display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
               </div>
 
-              {/* Large panel preview */}
-              <CroppedImage
-                imageUrl={previewPanel.imageUrl}
-                bbox={previewPanel.panel.bbox}
-                colorTag={previewPanel.panel.colorTag}
+              {/* Interactive preview with lasso support */}
+              <div
                 style={{
-                  maxWidth: 700,
-                  margin: '0 auto',
+                  position:'relative',
+                  width: '100%',
+                  aspectRatio: `${previewPanel.panel.bbox.w}/${previewPanel.panel.bbox.h}`,
+                  background: '#1a1a20',
                   borderRadius: 8,
-                  border: `3px solid ${previewPanel.panel.colorTag}`
+                  overflow: 'hidden',
+                  border: `3px solid ${previewPanel.panel.colorTag}`,
+                  cursor: isLassoing ? 'crosshair' : 'default',
+                  userSelect: 'none'
                 }}
-              />
-
-              <div style={{ fontSize:13, color:'#9898a8', lineHeight:1.8, maxWidth:500 }}>
-                <strong style={{color:'white'}}>Panel Info:</strong><br/>
-                Position: ({Math.round(previewPanel.panel.bbox.x)}, {Math.round(previewPanel.panel.bbox.y)})<br/>
-                Size: {Math.round(previewPanel.panel.bbox.w)} × {Math.round(previewPanel.panel.bbox.h)}
+                onMouseDown={(e) => {
+                  if (e.button !== 0) return; // only left click
+                  e.preventDefault();
+                  setIsLassoing(true);
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const scaleX = previewPanel.panel.bbox.w / rect.width;
+                  const scaleY = previewPanel.panel.bbox.h / rect.height;
+                  const x = previewPanel.panel.bbox.x + (e.clientX - rect.left) * scaleX;
+                  const y = previewPanel.panel.bbox.y + (e.clientY - rect.top) * scaleY;
+                  setLassoPoints([{ x, y }]);
+                }}
+                onMouseMove={(e) => {
+                  if (!isLassoing) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const scaleX = previewPanel.panel.bbox.w / rect.width;
+                  const scaleY = previewPanel.panel.bbox.h / rect.height;
+                  const x = previewPanel.panel.bbox.x + (e.clientX - rect.left) * scaleX;
+                  const y = previewPanel.panel.bbox.y + (e.clientY - rect.top) * scaleY;
+                  setLassoPoints(prev => [...prev, { x, y }]);
+                }}
+                onMouseUp={() => {
+                  if (!isLassoing) return;
+                  setIsLassoing(false);
+                  if (lassoPoints.length > 5) { // Ensure it's an actual shape
+                    const minX = Math.min(...lassoPoints.map(p => p.x));
+                    const maxX = Math.max(...lassoPoints.map(p => p.x));
+                    const minY = Math.min(...lassoPoints.map(p => p.y));
+                    const maxY = Math.max(...lassoPoints.map(p => p.y));
+                    
+                    onAddManualRegion(previewPanel.panel.panelId, lassoPoints, { x: minX, y: minY, w: maxX - minX, h: maxY - minY });
+                  }
+                  setLassoPoints([]);
+                }}
+                onMouseLeave={() => {
+                  if (isLassoing) {
+                    setIsLassoing(false);
+                    setLassoPoints([]);
+                  }
+                }}
+              >
+                <CroppedImage
+                  imageUrl={previewPanel.imageUrl}
+                  bbox={previewPanel.panel.bbox}
+                  colorTag={previewPanel.panel.colorTag}
+                  style={{ width: '100%', height: '100%', pointerEvents: 'none' }}
+                >
+                  <svg
+                    viewBox={`${previewPanel.panel.bbox.x} ${previewPanel.panel.bbox.y} ${Math.max(1, previewPanel.panel.bbox.w)} ${Math.max(1, previewPanel.panel.bbox.h)}`}
+                    preserveAspectRatio="none"
+                    style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+                  >
+                    {/* Render existing regions */}
+                    {(panelCharMap[previewPanel.panel.panelId] || []).map(r => {
+                      const char = characters.find(c => c._id === r.characterId);
+                      const color = char ? char.colorTag : '#9898a8';
+                      const strokeDasharray = char ? 'none' : '4 4';
+                      const fill = char ? color + '44' : 'transparent';
+                      const pts = r.points.map(p => `${p.x},${p.y}`).join(' ');
+                      const minX = Math.min(...r.points.map(p => p.x));
+                      const minY = Math.min(...r.points.map(p => p.y));
+                      
+                      return (
+                        <g key={r.characterRegionId}>
+                          <polygon
+                            points={pts}
+                            fill={fill}
+                            stroke={color}
+                            strokeWidth="2"
+                            strokeDasharray={strokeDasharray}
+                            style={{ pointerEvents: 'auto', cursor: selectedChar ? 'pointer' : 'crosshair' }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (selectedChar) onTagRegion(previewPanel.panel.panelId, r.characterRegionId, selectedChar);
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              onRemoveRegion(previewPanel.panel.panelId, r.characterRegionId);
+                            }}
+                          />
+                          {char && (
+                            <text
+                              x={minX}
+                              y={minY - 5}
+                              fill="white"
+                              style={{ 
+                                fontSize: '12px', 
+                                fontWeight: 'bold', 
+                                paintOrder: 'stroke',
+                                stroke: color,
+                                strokeWidth: '3px',
+                                strokeLinejoin: 'round',
+                                pointerEvents: 'none',
+                                textShadow: '0 1px 4px rgba(0,0,0,0.5)'
+                              }}
+                            >
+                              {char.name} {char.voiceId ? `(#${char.voiceId})` : ''}
+                            </text>
+                          )}
+                        </g>
+                      );
+                    })}
+                    
+                    {/* Render active lasso drawing */}
+                    {lassoPoints.length > 0 && (
+                      <polyline
+                        points={lassoPoints.map(p => `${p.x},${p.y}`).join(' ')}
+                        fill="rgba(46, 201, 126, 0.2)"
+                        stroke="#2ec97e"
+                        strokeWidth="2"
+                        strokeDasharray="4 4"
+                      />
+                    )}
+                  </svg>
+                </CroppedImage>
               </div>
 
-              <button onClick={()=>setPreviewPanel(null)} style={{ padding:'12px 24px', borderRadius:7, background:'#e8341a', color:'white', border:'none', fontSize:14, fontWeight:600, cursor:'pointer', alignSelf:'flex-start' }}>
-                Close Preview
-              </button>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <div style={{ fontSize:13, color:'#9898a8' }}>
+                  Select a character on the left, then click regions to tag them. <strong style={{color:'#e8341a'}}>Right-click a shape to delete it.</strong>
+                </div>
+                <button onClick={()=>setPreviewPanel(null)} style={{ padding:'10px 24px', borderRadius:7, background:'#35353f', color:'white', border:'none', fontSize:13, fontWeight:600, cursor:'pointer' }}>
+                  Done
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}
@@ -375,22 +516,13 @@ export function CharacterStep({
 }
 
 // ── PANEL THUMBNAIL ───────────────────────────────────────────────
-function PanelThumb({ panel, pageNumber, imageUrl, chars, characters, panelCharMap, onTagChar, selectedChar, onPreview }) {
-  const [showMenu, setShowMenu] = useState(false);
-  const taggedIds = panelCharMap[panel.panelId] || [];
-
+function PanelThumb({ panel, pageNumber, imageUrl, regions, characters, onTagRegion, selectedChar, onPreview }) {
   const handleClick = () => {
-    if (selectedChar) {
-      onTagChar(selectedChar, panel.panelId);
-    } else {
-      onPreview({ panel, imageUrl, pageNumber });
-    }
-  };
-
-  const handlePreview = (e) => {
-    e.stopPropagation();
     onPreview({ panel, imageUrl, pageNumber });
   };
+
+  const hasRegions = regions.length > 0;
+  const isFullyTagged = hasRegions && regions.every(r => r.characterId);
 
   return (
     <div style={{ position:'relative' }}>
@@ -398,80 +530,104 @@ function PanelThumb({ panel, pageNumber, imageUrl, chars, characters, panelCharM
         onClick={handleClick}
         style={{
           cursor:'pointer', borderRadius:8,
-          border:`2px solid ${chars.length>0?'#2ec97e':'#26262f'}`,
+          border:`2px solid ${isFullyTagged ? '#2ec97e' : hasRegions ? '#e8991a' : '#26262f'}`,
           overflow:'hidden', transition:'border-color .15s',
           background:'#1a1a20',
           aspectRatio: `${panel.bbox.w}/${panel.bbox.h}`,
           maxWidth: 180,
         }}
       >
-        {/* Panel preview — crop from page image using CroppedImage */}
         <CroppedImage
           imageUrl={imageUrl}
           bbox={panel.bbox}
           colorTag={panel.colorTag}
           style={{ width: '100%', height: '100%' }}
-        />
-        
-        {/* Character dots */}
-          <div style={{ position:'absolute', top:5, right:5, display:'flex', gap:3 }}>
-            {chars.map(c => (
-              <div key={c._id} style={{ width:8, height:8, borderRadius:'50%', background:c.colorTag||'#9b6bdc' }}/>
-            ))}
-          </div>
-          {/* Panel number badge */}
-          <div style={{
-            position:'absolute', top:4, left:4,
-            background: panel.colorTag, color:'white',
-            fontFamily:'Bebas Neue, sans-serif', fontSize:12, letterSpacing:1,
-            padding:'2px 8px', borderRadius:'2px',
-            pointerEvents:'none', lineHeight:1.2,
-          }}>
-            #{panel.readingOrder+1}
-          </div>
-        <div style={{ padding:'6px 8px', fontSize:10, color:'#6b6b7e', fontFamily:'JetBrains Mono, monospace', borderTop:'1px solid #26262f', display:'flex', alignItems:'center', justifyContent:'space-between', gap:6 }}>
-          <span>{panel.label || `#${panel.readingOrder+1}`}</span>
-          {!selectedChar && (
-            <button onClick={(e)=>{e.stopPropagation(); setShowMenu(v=>!v)}} style={{ background:'#26262f', border:'1px solid #35353f', color:'#9898a8', cursor:'pointer', fontSize:9, padding:'2px 6px', borderRadius:3, transition:'all .12s' }} title="Tag character">
-              Tag
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Character tag dropdown */}
-      <AnimatePresence>
-        {showMenu && !selectedChar && (
-          <motion.div
-            initial={{opacity:0,y:-4}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-4}}
-            style={{
-              position:'absolute', top:'100%', left:0, zIndex:50, marginTop:4,
-              background:'#1a1a20', border:'1px solid #35353f', borderRadius:8,
-              minWidth:160, boxShadow:'0 8px 24px rgba(0,0,0,.5)', overflow:'hidden',
-            }}
+        >
+          <svg
+            viewBox={`${panel.bbox.x} ${panel.bbox.y} ${Math.max(1, panel.bbox.w)} ${Math.max(1, panel.bbox.h)}`}
+            preserveAspectRatio="none"
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
           >
-            {characters.length === 0 && (
-              <div style={{ padding:'12px 14px', fontSize:11, color:'#6b6b7e' }}>Add characters first</div>
-            )}
-            {characters.map(c => {
-              const tagged = taggedIds.includes(c._id);
+            {regions.map(r => {
+              const char = characters.find(c => c._id === r.characterId);
+              const color = char ? char.colorTag : '#9898a8';
+              const strokeDasharray = char ? 'none' : '4 4';
+              const fill = char ? color + '44' : 'transparent';
+              const pts = r.points.map(p => `${p.x},${p.y}`).join(' ');
+              const minX = Math.min(...r.points.map(pts => pts.x));
+              const minY = Math.min(...r.points.map(pts => pts.y));
+              
               return (
-                <div key={c._id} onClick={()=>{ onTagChar(c._id, panel.panelId); setShowMenu(false); }} style={{
-                  display:'flex', alignItems:'center', gap:10,
-                  padding:'8px 12px', cursor:'pointer', transition:'background .1s',
-                  background: tagged ? c.colorTag+'22' : 'transparent',
-                  fontSize:12,
-                }}>
-                  <div style={{ width:8, height:8, borderRadius:'50%', background: c.colorTag||'#9b6bdc' }}/>
-                  <span style={{ color: tagged ? 'white' : '#9898a8', flex:1 }}>{c.name}</span>
-                  {tagged && <span style={{ color:'#2ec97e', fontSize:11 }}>✓</span>}
-                </div>
+                <g key={r.characterRegionId}>
+                  <polygon
+                    points={pts}
+                    fill={fill}
+                    stroke={color}
+                    strokeWidth="3"
+                    strokeDasharray={strokeDasharray}
+                    style={{ pointerEvents: 'auto', transition: 'all 0.2s', cursor: selectedChar ? 'pointer' : 'default' }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (selectedChar) onTagRegion(panel.panelId, r.characterRegionId, selectedChar);
+                    }}
+                    onMouseEnter={(e) => {
+                      if (selectedChar) e.currentTarget.style.fill = 'rgba(255,255,255,0.3)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.fill = fill;
+                    }}
+                  />
+                  {char && (
+                    <text
+                      x={minX}
+                      y={minY - 5}
+                      fill="white"
+                      style={{ 
+                        fontSize: '14px', 
+                        fontWeight: 'bold', 
+                        paintOrder: 'stroke',
+                        stroke: color,
+                        strokeWidth: '4px',
+                        strokeLinejoin: 'round',
+                        pointerEvents: 'none'
+                      }}
+                    >
+                      {char.name}
+                    </text>
+                  )}
+                </g>
               );
             })}
-            <div onClick={()=>setShowMenu(false)} style={{ padding:'7px 12px', fontSize:11, color:'#35353f', borderTop:'1px solid #26262f', cursor:'pointer' }}>Close</div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          </svg>
+        </CroppedImage>
+        
+        {/* Character dots summary */}
+        <div style={{ position:'absolute', top:5, right:5, display:'flex', gap:3 }}>
+          {regions.filter(r => r.characterId).map(r => {
+            const char = characters.find(c => c._id === r.characterId);
+            return char ? <div key={r.characterRegionId} style={{ width:8, height:8, borderRadius:'50%', background:char.colorTag||'#9b6bdc', boxShadow:'0 0 4px rgba(0,0,0,.5)' }}/> : null;
+          })}
+        </div>
+        
+        {/* Panel number badge */}
+        <div style={{
+          position:'absolute', top:4, left:4,
+          background: panel.colorTag, color:'white',
+          fontFamily:'Bebas Neue, sans-serif', fontSize:12, letterSpacing:1,
+          padding:'2px 8px', borderRadius:'2px',
+          pointerEvents:'none', lineHeight:1.2,
+          boxShadow: '0 2px 4px rgba(0,0,0,.5)'
+        }}>
+          #{panel.readingOrder+1}
+        </div>
+      </div>
+      
+      <div style={{ padding:'6px 8px', fontSize:10, color:'#6b6b7e', fontFamily:'JetBrains Mono, monospace', borderTop:'1px solid #26262f', display:'flex', alignItems:'center', justifyContent:'space-between', gap:6 }}>
+        <span>{panel.label || `#${panel.readingOrder+1}`}</span>
+        <span style={{ fontSize:9, color: isFullyTagged ? '#2ec97e' : hasRegions ? '#e8991a' : '#6b6b7e' }}>
+          {regions.length} chars
+        </span>
+      </div>
     </div>
   );
 }

@@ -118,6 +118,44 @@ export const AuthProvider = ({ children }) => {
     checkAuth();
   }, []);
 
+  // Set up auto-refresh interceptor for JWT
+  useEffect(() => {
+    const interceptor = api.interceptors.response.use(
+      (response) => response,
+      async (error) => {
+        const originalRequest = error.config;
+        
+        // If 401 and we haven't retried yet
+        if (error.response?.status === 401 && !originalRequest._retry) {
+          originalRequest._retry = true;
+          
+          try {
+            // Create a fresh JWT
+            const jwtObj = await account.createJWT();
+            const token = jwtObj.jwt;
+            
+            // Update default headers for future requests
+            api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+            
+            // Update the current failed request and retry
+            originalRequest.headers['Authorization'] = `Bearer ${token}`;
+            return api(originalRequest);
+          } catch (refreshError) {
+            console.error('Token refresh failed:', refreshError);
+            // If refresh fails, user might actually be logged out
+            return Promise.reject(error);
+          }
+        }
+        
+        return Promise.reject(error);
+      }
+    );
+
+    return () => {
+      api.interceptors.response.eject(interceptor);
+    };
+  }, []);
+
   return (
     <AuthContext.Provider value={{
       currentUser, dbUser, loading,

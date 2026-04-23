@@ -36,9 +36,13 @@ function validationGuard(req, res) {
   return false;
 }
 
-function normPanel(p, index) {
+function normPanel(p, index, pageNumber) {
+  const prefix = `p${pageNumber}_`;
+  let panelId = p.panelId || `panel_${Date.now()}_${index}`;
+  if (!panelId.startsWith(prefix)) panelId = prefix + panelId;
+  
   return {
-    panelId:      p.panelId      || `panel_${Date.now()}_${index}`,
+    panelId,
     readingOrder: typeof p.readingOrder === 'number' ? p.readingOrder : index,
     label:        p.label        || `Panel ${index + 1}`,
     bbox: {
@@ -52,6 +56,7 @@ function normPanel(p, index) {
     contentZones:       p.contentZones       || [],
     suggestedCamera:    p.suggestedCamera    || 'static',
     emotionalIntensity: p.emotionalIntensity || 0,
+    characterRegions:   p.characterRegions   || [],
   };
 }
 
@@ -175,10 +180,13 @@ router.post('/:chapterId/:pageNumber/detect-instant',
         artStyle
       });
 
+      const pageNum = parseInt(pageNumber);
+      const panels = detectionResult.panels.map((p, i) => normPanel(p, i, pageNum));
+
       // Get or create manifest
       const existRes = await databases.listDocuments(DB, PANEL_MANIFESTS, [
         Query.equal('chapterId', chapterId),
-        Query.equal('pageNumber', parseInt(pageNumber))
+        Query.equal('pageNumber', pageNum)
       ]);
 
       let manifest;
@@ -187,15 +195,15 @@ router.post('/:chapterId/:pageNumber/detect-instant',
           chapterId,
           mangaId: chapterDoc.mangaId,
           uploader: req.user._id,
-          pageNumber: parseInt(pageNumber),
+          pageNumber: pageNum,
           imageUrl,
           imageWidth,
           imageHeight,
           readingDirection,
           artStyle,
           status: 'detected',
-          detectedPanels: JSON.stringify(detectionResult.panels),
-          panels: JSON.stringify(detectionResult.panels),
+          detectedPanels: JSON.stringify(panels),
+          panels: JSON.stringify(panels),
           detectionConfidence: detectionResult.confidence,
           detectionMethod: detectionResult.method,
           corrections: '[]'
@@ -209,8 +217,8 @@ router.post('/:chapterId/:pageNumber/detect-instant',
           imageHeight,
           readingDirection,
           artStyle,
-          detectedPanels: JSON.stringify(detectionResult.panels),
-          panels: JSON.stringify(detectionResult.panels),
+          detectedPanels: JSON.stringify(panels),
+          panels: JSON.stringify(panels),
           detectionConfidence: detectionResult.confidence,
           detectionMethod: detectionResult.method
         });
@@ -350,7 +358,7 @@ router.put('/:chapterId/:pageNumber',
         if (!p.bbox || typeof p.bbox.x !== 'number') {
           throw new Error(`Panel ${i} missing valid bbox`);
         }
-        return normPanel(p, i);
+        return normPanel(p, i, req.params.pageNumber);
       });
 
       // Re-sort by reading order
@@ -418,6 +426,71 @@ router.get('/:manifestId/detection-status', verifyToken, async (req, res) => {
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
+});
+
+/**
+ * INSTANT DETECT CHARACTERS - Synchronous character detection
+ */
+router.post('/:chapterId/:pageNumber/detect-characters-instant',
+  verifyToken,
+  async (req, res) => {
+    try {
+      const { chapterId, pageNumber } = req.params;
+      
+      // Verify ownership
+      const chapterDoc = await databases.getDocument(DB, CHAPTERS, chapterId);
+      const manga = await databases.getDocument(DB, MANGAS, chapterDoc.mangaId);
+      if (manga.authorId !== req.user._id) {
+        return res.status(403).json({ success: false, message: 'Unauthorized' });
+      }
+
+      // Get manifest
+      const manifestRes = await databases.listDocuments(DB, PANEL_MANIFESTS, [
+        Query.equal('chapterId', chapterId),
+        Query.equal('pageNumber', parseInt(pageNumber))
+      ]);
+
+      if (manifestRes.documents.length === 0) {
+        return res.status(404).json({ success: false, message: 'Manifest not found' });
+      }
+
+      const manifest = manifestRes.documents[0];
+      const pageNum = parseInt(pageNumber);
+      const panels = JSON.parse(manifest.panels || '[]');
+      
+      const characterDetectionService = require('../services/characterDetectionService');
+      const results = {};
+
+      for (const panel of panels) {
+        // Ensure panelId is unique even if loading from old manifest
+        if (!panel.panelId.startsWith(`p${pageNum}_`)) {
+          panel.panelId = `p${pageNum}_${panel.panelId}`;
+        }
+
+        const detection = await characterDetectionService.detectCharacters({
+          manifestId: manifest.$id,
+          panelId: panel.panelId,
+          imageUrl: manifest.imageUrl,
+          bbox: panel.bbox
+        });
+        
+        if (detection.success) {
+          results[panel.panelId] = (detection.detectedCharacters || []).map(c => ({
+            ...c,
+            characterId: null // initially untagged
+          }));
+        }
+      }
+
+      res.json({
+        success: true,
+        message: 'Characters detected successfully',
+        data: results
+      });
+    } catch (err) {
+      console.error('[Character Detection] Instant error:', err);
+      res.status(500).json({ success: false, message: err.message });
+    }
 });
 
 /**

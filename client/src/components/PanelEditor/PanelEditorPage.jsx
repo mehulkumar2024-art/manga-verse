@@ -10,6 +10,8 @@ import { panelService, characterService } from '../../services/panelService';
 import PanelCanvas from './PanelCanvas';
 import PanelSidebar from './PanelSidebar';
 import StepBar, { CharacterStep } from './StepBar';
+import VoiceAssignmentStep from './VoiceAssignmentStep';
+
 export default function PanelEditorPage() {
   const { mangaId, chapterId } = useParams();
   const navigate = useNavigate();
@@ -132,6 +134,21 @@ export default function PanelEditorPage() {
     }
   };
 
+  // Populate character map from manifests once they load
+  useEffect(() => {
+    if (manifests.length > 0) {
+      const initialMap = {};
+      manifests.forEach(m => {
+        (m.panels || []).forEach(p => {
+          if (p.characterRegions && p.characterRegions.length > 0) {
+            initialMap[p.panelId] = p.characterRegions;
+          }
+        });
+      });
+      setPanelCharMap(prev => ({ ...initialMap, ...prev }));
+    }
+  }, [manifests]);
+
   // ── Character management ─────────────────────────────────────
   const addCharacter = async (payload) => {
     try {
@@ -163,14 +180,93 @@ export default function PanelEditorPage() {
     }
   };
 
-  const tagCharInPanel = async (characterId, panelId) => {
-    const existing = panelCharMap[panelId] || [];
-    if (existing.includes(characterId)) {
-      await characterService.untagAppearance(characterId, { chapterId, pageNumber: currentPage, panelId });
-      setPanelCharMap(prev => ({ ...prev, [panelId]: (prev[panelId]||[]).filter(id=>id!==characterId) }));
-    } else {
-      await characterService.tagAppearance(characterId, { chapterId, pageNumber: currentPage, panelId });
-      setPanelCharMap(prev => ({ ...prev, [panelId]: [...(prev[panelId]||[]), characterId] }));
+  const handleAutoDetectCharacters = async (pageNumber) => {
+    setDetecting(true);
+    try {
+      const data = await panelService.detectCharactersInstant(chapterId, pageNumber);
+      if (!data.success) throw new Error(data.message);
+      
+      setPanelCharMap(prev => {
+        const next = { ...prev };
+        // data.data is { [panelId]: [ { characterRegionId, bbox, points, characterId }, ... ] }
+        Object.keys(data.data).forEach(pid => {
+          next[pid] = data.data[pid];
+        });
+        return next;
+      });
+      toast.success('Characters auto-detected!');
+    } catch (e) {
+      toast.error('Character detection failed: ' + e.message);
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  const tagRegionInPanel = async (panelId, regionId, characterId) => {
+    setPanelCharMap(prev => {
+      const panels = { ...prev };
+      const regions = panels[panelId] || [];
+      panels[panelId] = regions.map(r => 
+        r.characterRegionId === regionId 
+          ? { ...r, characterId: r.characterId === characterId ? null : characterId } 
+          : r
+      );
+      return panels;
+    });
+    // Optional: Sync this specific region update to backend here
+  };
+
+  const addManualRegion = async (panelId, points, bbox) => {
+    setPanelCharMap(prev => {
+      const panels = { ...prev };
+      const regions = panels[panelId] || [];
+      const newRegion = {
+        characterRegionId: 'manual_' + Date.now(),
+        points,
+        bbox,
+        characterId: null,
+        type: 'manual'
+      };
+      panels[panelId] = [...regions, newRegion];
+      return panels;
+    });
+  };
+
+  const removeRegion = async (panelId, regionId) => {
+    setPanelCharMap(prev => {
+      const panels = { ...prev };
+      panels[panelId] = (panels[panelId] || []).filter(r => r.characterRegionId !== regionId);
+      return panels;
+    });
+  };
+
+  const handleSaveCharacterMappings = async () => {
+    try {
+      setSaving(true);
+      // Group panels by page and update manifests
+      for (const m of manifests) {
+        const updatedPanels = m.panels.map(p => ({
+          ...p,
+          characterRegions: panelCharMap[p.panelId] || []
+        }));
+        await panelService.savePanels(chapterId, m.pageNumber, updatedPanels);
+      }
+      toast.success('Character mappings saved!');
+      setCurrentStep(4); // Move to Step 4
+    } catch (e) {
+      toast.error('Failed to save mappings: ' + e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAssignVoiceToCharacter = async (charId, voiceId, voiceType) => {
+    try {
+      await characterService.assignVoice(charId, { voiceId, voiceType });
+      setCharacters(prev => prev.map(c => c._id === charId ? { ...c, voiceId, voiceType } : c));
+      toast.success('Voice assigned successfully');
+    } catch (e) {
+      toast.error('Failed to assign voice: ' + e.message);
     }
   };
 
@@ -251,7 +347,7 @@ export default function PanelEditorPage() {
             animate={{ opacity:1, x:0 }}
             exit={{ opacity:0, x:-20 }}
             transition={{ duration:.2 }}
-            style={{ flex:1, overflow:'hidden' }}
+            style={{ flex:1, display: 'flex', flexDirection: 'column', overflow:'hidden' }}
           >
             <CharacterStep
               manifests={manifests}
@@ -260,9 +356,34 @@ export default function PanelEditorPage() {
               onAddCharacter={addCharacter}
               onUpdateCharacter={updateCharacter}
               onDeleteCharacter={deleteCharacter}
-              onTagChar={tagCharInPanel}
+              onTagRegion={tagRegionInPanel}
+              onAddManualRegion={addManualRegion}
+              onRemoveRegion={removeRegion}
+              onDetectCharacters={handleAutoDetectCharacters}
+              detecting={detecting}
               onBack={() => setCurrentStep(2)}
-              onNext={() => { toast.success('Moving to Voice Assignment!'); setCurrentStep(4); }}
+              onNext={handleSaveCharacterMappings}
+            />
+          </motion.div>
+        )}
+
+        {currentStep === 4 && (
+          <motion.div
+            key="voice-assign"
+            initial={{ opacity:0, x:20 }}
+            animate={{ opacity:1, x:0 }}
+            exit={{ opacity:0, x:-20 }}
+            transition={{ duration:.2 }}
+            style={{ flex:1, display: 'flex', flexDirection: 'column', overflow:'hidden' }}
+          >
+            <VoiceAssignmentStep 
+              characters={characters}
+              onAssignVoice={handleAssignVoiceToCharacter}
+              onBack={() => setCurrentStep(3)}
+              onFinish={() => {
+                toast.success('Building your Cinematic Manga Experience...');
+                setTimeout(() => navigate(`/manga/${mangaId}`), 2000);
+              }}
             />
           </motion.div>
         )}

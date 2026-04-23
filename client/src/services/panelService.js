@@ -21,6 +21,10 @@ export const panelService = {
   detectPage: (chapterId, pageNumber, payload) =>
     api.post(`/panels/${chapterId}/${pageNumber}/detect-instant`, payload).then(res => res.data),
 
+  /** Trigger character detection - Instant detection with immediate results */
+  detectCharactersInstant: (chapterId, pageNumber) =>
+    api.post(`/panels/${chapterId}/${pageNumber}/detect-characters-instant`).then(res => res.data),
+
   /** Save corrected panels to backend */
   savePanels: (chapterId, pageNumber, panels, correctionNote = '') =>
     api.put(`/panels/${chapterId}/${pageNumber}`, { panels, correctionNote }).then(res => res.data),

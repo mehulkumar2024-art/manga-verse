@@ -36,13 +36,14 @@ router.post('/manga/:mangaId',
   [ body('name').trim().notEmpty().withMessage('Name is required') ],
   async (req, res) => {
     if (vGuard(req, res)) return;
-    const { name, voiceType, colorTag, isMainCharacter, aliases } = req.body;
+    const { name, voiceType, voiceId, colorTag, isMainCharacter, aliases } = req.body;
     try {
       const charData = {
         mangaId:     req.params.mangaId,
         uploaderId:  req.user._id || req.user.uid,
         name, 
         voiceType: voiceType || '', 
+        voiceId: voiceId || '',
         colorTag: colorTag || '', 
         isMainCharacter: !!isMainCharacter, 
         aliases: Array.isArray(aliases) ? aliases : []
