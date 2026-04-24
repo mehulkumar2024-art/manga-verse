@@ -5,24 +5,41 @@ const redis = require('redis');
 let redisClient = null;
 let useRedis = true;
 
+const redisConfig = {
+  host: process.env.REDIS_HOST || 'localhost',
+  port: process.env.REDIS_PORT || 6379,
+  password: process.env.REDIS_PASSWORD || undefined,
+  retryStrategy: (times) => {
+    if (times > 3) {
+      if (useRedis) {
+        console.warn('⚠️  Redis connection failed - Falling back to in-memory queue');
+        useRedis = false;
+      }
+      return null; // Stop retrying
+    }
+    return Math.min(times * 100, 3000);
+  },
+};
+
 try {
-  redisClient = redis.createClient({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD || undefined,
-    retryStrategy: (times) => Math.min(times * 50, 2000),
-  });
+  redisClient = redis.createClient(redisConfig);
 
   redisClient.on('error', (err) => {
-    console.warn('⚠️  Redis Client Error - Using in-memory queue:', err.code);
-    useRedis = false;
+    if (useRedis && process.env.NODE_ENV !== 'production') {
+      // Only log once to avoid spam
+      console.warn('ℹ️  Redis not detected. Using in-memory fallback for queues.');
+      useRedis = false;
+    }
   });
   
-  redisClient.on('connect', () => console.log('✓ Redis connected'));
+  redisClient.on('connect', () => {
+    useRedis = true;
+    console.log('✓ Redis connected');
+  });
 } catch (err) {
-  console.warn('⚠️  Redis not available - Using in-memory queue for development');
   useRedis = false;
 }
+
 
 // Create job queues
 const panelDetectionQueue = useRedis ? new Queue('panel-detection', {
@@ -139,13 +156,14 @@ const setupQueueListeners = (queue, queueName) => {
   });
 
   queue.on('failed', (job, err) => {
-    console.error(`[${queueName}] Job ${job.id} failed:`, err.message);
+    if (useRedis) console.error(`[${queueName}] Job ${job.id} failed:`, err.message);
   });
 
   queue.on('error', (err) => {
-    console.error(`[${queueName}] Queue error:`, err);
+    if (useRedis) console.error(`[${queueName}] Queue error:`, err);
   });
 };
+
 
 setupQueueListeners(panelDetectionQueue, 'Panel Detection');
 setupQueueListeners(characterDetectionQueue, 'Character Detection');

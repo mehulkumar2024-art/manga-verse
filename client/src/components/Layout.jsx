@@ -60,7 +60,7 @@ export default function Layout() {
             onClick={() => setSidebarOpen(false)}
             style={{
               position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
-              zIndex: 40, backdropFilter: 'blur(4px)'
+              zIndex: 40
             }}
           />
         )}
@@ -118,8 +118,7 @@ export default function Layout() {
           height: 'var(--nav-height)', background: 'var(--bg-1)',
           borderBottom: '1px solid var(--border)',
           display: 'flex', alignItems: 'center', gap: 16,
-          padding: '0 20px', position: 'sticky', top: 0, zIndex: 30,
-          backdropFilter: 'blur(12px)'
+          padding: '0 20px', position: 'sticky', top: 0, zIndex: 30
         }}>
           {/* Mobile menu toggle */}
           <button

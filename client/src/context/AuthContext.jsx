@@ -16,6 +16,7 @@ export const AuthProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(null);
   const [dbUser, setDbUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [needsRegistration, setNeedsRegistration] = useState(false);
 
   // Sync with Appwrite Database backend
   const syncUser = async () => {
@@ -27,11 +28,15 @@ export const AuthProvider = ({ children }) => {
       const res = await api.post('/auth/login', { idToken: token });
       if (res.data.success) {
         setDbUser(res.data.user);
+        setNeedsRegistration(false);
         return { success: true, user: res.data.user };
       }
       return { success: false, needsRegistration: res.data.needsRegistration };
     } catch (err) {
       const needsReg = err.response?.data?.needsRegistration;
+      if (needsReg) {
+        setNeedsRegistration(true);
+      }
       return { success: false, needsRegistration: needsReg };
     }
   };
@@ -46,6 +51,7 @@ export const AuthProvider = ({ children }) => {
       const res = await api.post('/auth/register', { idToken: jwtObj.jwt, username, displayName });
       if (res.data.success) {
         setDbUser(res.data.user);
+        setNeedsRegistration(false);
         setCurrentUser(await account.get());
       }
       return res.data;
@@ -69,8 +75,20 @@ export const AuthProvider = ({ children }) => {
 
   const loginWithGoogle = async (username) => {
     try {
-      // NOTE: OAuth2 login redirects, so sync happens on auth state change
-      account.createOAuth2Session('google', window.location.origin, window.location.origin + '/auth');
+      // NOTE: OAuth2 login redirects, so sync happens on auth state change after return
+      // If username is provided, it means we're completing registration
+      if (username) {
+        const jwtObj = await account.createJWT();
+        api.defaults.headers.common['Authorization'] = `Bearer ${jwtObj.jwt}`;
+        const res = await api.post('/auth/register', { idToken: jwtObj.jwt, username });
+        if (res.data.success) {
+          setDbUser(res.data.user);
+          setNeedsRegistration(false);
+          return { success: true, user: res.data.user };
+        }
+      } else {
+        account.createOAuth2Session('google', window.location.origin + '/auth', window.location.origin + '/auth');
+      }
     } catch (error) {
       console.error('Google login error:', error);
       throw error;
@@ -82,6 +100,7 @@ export const AuthProvider = ({ children }) => {
       await account.deleteSession('current');
       setCurrentUser(null);
       setDbUser(null);
+      setNeedsRegistration(false);
       delete api.defaults.headers.common['Authorization'];
       toast.success('Signed out');
     } catch (error) {
@@ -96,7 +115,10 @@ export const AuthProvider = ({ children }) => {
   const refreshDbUser = async () => {
     try {
       const res = await api.get('/auth/me');
-      if (res.data.success) setDbUser(res.data.user);
+      if (res.data.success) {
+        setDbUser(res.data.user);
+        setNeedsRegistration(false);
+      }
     } catch {}
   };
 
@@ -110,6 +132,7 @@ export const AuthProvider = ({ children }) => {
         // Not logged in
         setCurrentUser(null);
         setDbUser(null);
+        setNeedsRegistration(false);
       } finally {
         setLoading(false);
       }
@@ -158,7 +181,7 @@ export const AuthProvider = ({ children }) => {
 
   return (
     <AuthContext.Provider value={{
-      currentUser, dbUser, loading,
+      currentUser, dbUser, loading, needsRegistration,
       register, loginWithEmail, loginWithGoogle,
       logout, resetPassword, refreshDbUser,
     }}>
@@ -166,3 +189,4 @@ export const AuthProvider = ({ children }) => {
     </AuthContext.Provider>
   );
 };
+
