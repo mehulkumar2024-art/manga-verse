@@ -1,12 +1,53 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import CroppedImage from './CroppedImage';
+import { extractTextFromImageRegion } from '../../services/ocrClient';
+import toast from 'react-hot-toast';
 
 export function DialogueStep({
   manifests, characters, panelCharMap, onUpdateRegionText, onSaveDialogues, onBack,
 }) {
   const [selectedPanelId, setSelectedPanelId] = useState(null);
+  const [isDetecting, setIsDetecting] = useState(false);
   
+  const handleAutoDetect = async () => {
+    setIsDetecting(true);
+    let count = 0;
+    try {
+      for (const m of manifests) {
+        for (const p of (m.panels || [])) {
+          const regions = panelCharMap[p.panelId] || [];
+          for (const r of regions) {
+            if (!r.text || r.text.trim() === '') {
+              let x, y, w, h;
+              if (r.bbox) {
+                x = r.bbox.x; y = r.bbox.y; w = r.bbox.w; h = r.bbox.h;
+              } else if (r.points && r.points.length > 0) {
+                const xs = r.points.map(pt => pt.x);
+                const ys = r.points.map(pt => pt.y);
+                x = Math.min(...xs); y = Math.min(...ys);
+                w = Math.max(...xs) - x; h = Math.max(...ys) - y;
+              } else {
+                continue;
+              }
+              
+              const res = await extractTextFromImageRegion(m.imageUrl, x, y, w, h, r.characterRegionId);
+              if (res.success && res.extractedText) {
+                onUpdateRegionText(p.panelId, r.characterRegionId, res.extractedText);
+                count++;
+              }
+            }
+          }
+        }
+      }
+      toast.success(`Extracted text for ${count} regions!`);
+    } catch (e) {
+      toast.error('Auto-detect failed: ' + e.message);
+    } finally {
+      setIsDetecting(false);
+    }
+  };
+
   // Find the selected panel across all manifests
   const selectedPanelObj = selectedPanelId 
     ? manifests.flatMap(m => (m.panels || []).map(p => ({ panel: p, imageUrl: m.imageUrl }))).find(p => p.panel.panelId === selectedPanelId)
@@ -72,10 +113,14 @@ export function DialogueStep({
 
         <div style={{ display: 'flex', gap: 12, marginTop: 32, paddingTop: 24, borderTop: '1px solid #26262f' }}>
           <button onClick={onBack} style={{ padding: '10px 20px', borderRadius: 7, background: 'transparent', color: '#9898a8', border: '1px solid #35353f', fontSize: 13, cursor: 'pointer' }}>
-            ← Back to Characters
+            ← Back
           </button>
+          <button onClick={handleAutoDetect} disabled={isDetecting} style={{ padding: '10px 20px', borderRadius: 7, background: '#1a1a20', color: '#3a9bdc', border: '1px solid #3a9bdc', fontSize: 13, fontWeight: 600, cursor: isDetecting ? 'not-allowed' : 'pointer', opacity: isDetecting ? 0.6 : 1 }}>
+            {isDetecting ? 'Detecting...' : 'Auto-Detect All Dialogue'}
+          </button>
+          <div style={{ flex: 1 }} />
           <button onClick={onSaveDialogues} style={{ padding: '10px 24px', borderRadius: 7, background: '#3a9bdc', color: 'white', border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-            Save Dialogues & Next →
+            Save & Next →
           </button>
         </div>
       </div>

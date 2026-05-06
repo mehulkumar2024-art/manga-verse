@@ -39,9 +39,31 @@ export default function Reader() {
   const [loading, setLoading] = useState(true);
   const [characters, setCharacters] = useState([]);
   const [currentText, setCurrentText] = useState('');
+  const [typedText, setTypedText] = useState('');
   const [showSubtitle, setShowSubtitle] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const audioRef = React.useRef(null);
+
+  // Typewriter effect
+  useEffect(() => {
+    if (!showSubtitle || !currentText) {
+      setTypedText('');
+      return;
+    }
+    let currentIndex = 0;
+    const durationEstimateMs = (currentText.length / 15) * 1000;
+    const intervalTime = Math.max(30, durationEstimateMs / currentText.length);
+    
+    const timer = setInterval(() => {
+      currentIndex++;
+      setTypedText(currentText.substring(0, currentIndex));
+      if (currentIndex >= currentText.length) {
+        clearInterval(timer);
+      }
+    }, intervalTime);
+    
+    return () => clearInterval(timer);
+  }, [currentText, showSubtitle]);
 
   useEffect(() => {
     const fetch = async () => {
@@ -141,11 +163,13 @@ export default function Reader() {
 
   useEffect(() => {
     let timer;
-    if (isCinematic && currentPanelIndex !== -2 && !isSpeaking) { // -2 would be paused
-      timer = setInterval(advanceCinematic, 4000); // Auto-advance every 4s if not speaking
+    if (isCinematic && currentPanelIndex !== -2 && !isSpeaking) {
+      // Auto-advance after speech finishes, with a short delay
+      const delay = currentText ? 1500 : 2500;
+      timer = setTimeout(advanceCinematic, delay);
     }
-    return () => clearInterval(timer);
-  }, [isCinematic, currentPanelIndex, advanceCinematic, isSpeaking]);
+    return () => clearTimeout(timer);
+  }, [isCinematic, currentPanelIndex, advanceCinematic, isSpeaking, currentText]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -216,9 +240,8 @@ export default function Reader() {
               setIsSpeaking(true);
               speakText(textToSpeak, { voiceType, rate: speed, pitch, volume: 1.0 })
                 .then(() => {
-                  // Only advance if we haven't manually changed panels
                   setIsSpeaking(false);
-                  advanceCinematic();
+                  // advanceCinematic will be triggered by the auto-advance useEffect
                 })
                 .catch(err => {
                   console.log('TTS Error:', err);
@@ -440,7 +463,27 @@ export default function Reader() {
                           imageUrl={pages[currentPage].url}
                           bbox={{ x, y, w, h }}
                           style={{ height: '100%', width: 'auto', maxHeight: '100%' }}
-                        />
+                        >
+                          <svg
+                            viewBox={`${x} ${y} ${w} ${h}`}
+                            preserveAspectRatio="none"
+                            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+                          >
+                            {(panel.characterRegions || []).map((r, idx) => {
+                              if (!r.points || r.points.length === 0) return null;
+                              const pts = r.points.map(p => `${p.x},${p.y}`).join(' ');
+                              return (
+                                <polygon
+                                  key={idx}
+                                  points={pts}
+                                  fill="#ffffff"
+                                  stroke="#ffffff"
+                                  strokeWidth="2"
+                                />
+                              );
+                            })}
+                          </svg>
+                        </CroppedImage>
                       </motion.div>
                     );
                   }
@@ -493,7 +536,8 @@ export default function Reader() {
               letterSpacing: 0.5, lineHeight: 1.4
             }}
           >
-            {currentText}
+            {typedText}
+            {typedText.length < currentText.length && <span style={{ opacity: 0.5 }}>|</span>}
           </motion.div>
         )}
       </AnimatePresence>
