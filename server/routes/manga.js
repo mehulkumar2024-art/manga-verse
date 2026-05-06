@@ -39,9 +39,7 @@ router.get('/', optionalAuth, async (req, res) => {
   try {
     const { genre, status, sort = 'newest', search, page = 1, limit = 20 } = req.query;
     
-    let queries = [Query.equal('isPublished', true)]; // Wait, isPublished wasn't in appwrite schema. Let's ignore it or query what we have.
-    // Wait, the schema in appwrite-setup didn't add isPublished. We'll skip it.
-    queries = [];
+    let queries = [Query.notEqual('status', 'Draft')];
 
     if (genre) queries.push(Query.contains('genres', genre));
     if (status) queries.push(Query.equal('status', status));
@@ -74,8 +72,8 @@ router.get('/', optionalAuth, async (req, res) => {
 // Get featured manga
 router.get('/featured', async (req, res) => {
   try {
-    // Schema didn't add isFeatured. We will just return 6 newest for now.
     const response = await databases.listDocuments(DB, MANGAS, [
+      Query.notEqual('status', 'Draft'),
       Query.orderDesc('$createdAt'),
       Query.limit(6)
     ]);
@@ -91,6 +89,7 @@ router.get('/featured', async (req, res) => {
 router.get('/trending', async (req, res) => {
   try {
     const response = await databases.listDocuments(DB, MANGAS, [
+      Query.notEqual('status', 'Draft'),
       Query.orderDesc('views'),
       Query.limit(12)
     ]);
@@ -214,6 +213,25 @@ router.put('/:id', authenticate, uploadCover, async (req, res) => {
     mapped = await populateAuthor(mapped);
 
     res.json({ success: true, manga: mapped });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Publish manga (Change status from Draft to Ongoing)
+router.post('/:id/publish', authenticate, async (req, res) => {
+  try {
+    const manga = await databases.getDocument(DB, MANGAS, req.params.id);
+    if (manga.authorId !== req.user._id) {
+      return res.status(403).json({ success: false, message: 'Unauthorized' });
+    }
+
+    if (manga.status === 'Draft') {
+      const updated = await databases.updateDocument(DB, MANGAS, req.params.id, { status: 'Ongoing' });
+      res.json({ success: true, manga: mapDoc(updated) });
+    } else {
+      res.json({ success: true, manga: mapDoc(manga) });
+    }
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

@@ -4,17 +4,17 @@
  * text-to-speech synthesis, and comprehensive error handling
  */
 
-const express  = require('express');
-const router   = express.Router();
+const express = require('express');
+const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const { ID, Query } = require('node-appwrite');
 const { databases } = require('../config/appwrite');
 const { verifyToken, checkOwnership } = require('../middleware/auth');
 const { mapDoc, mapList } = require('../utils/appwriteMapper');
-const { 
-  panelDetectionQueue, 
-  characterDetectionQueue, 
-  ocrQueue, 
+const {
+  panelDetectionQueue,
+  characterDetectionQueue,
+  ocrQueue,
   ttsQueue,
   addPanelDetection,
   addCharacterDetection,
@@ -40,23 +40,23 @@ function normPanel(p, index, pageNumber) {
   const prefix = `p${pageNumber}_`;
   let panelId = p.panelId || `panel_${Date.now()}_${index}`;
   if (!panelId.startsWith(prefix)) panelId = prefix + panelId;
-  
+
   return {
     panelId,
     readingOrder: typeof p.readingOrder === 'number' ? p.readingOrder : index,
-    label:        p.label        || `Panel ${index + 1}`,
+    label: p.label || `Panel ${index + 1}`,
     bbox: {
       x: Math.round(p.bbox.x), y: Math.round(p.bbox.y),
       w: Math.max(10, Math.round(p.bbox.w)),
       h: Math.max(10, Math.round(p.bbox.h)),
     },
-    panelType:          p.panelType          || 'bordered',
-    colorTag:           p.colorTag           || '#e8341a',
-    speechBubbles:      p.speechBubbles      || [],
-    contentZones:       p.contentZones       || [],
-    suggestedCamera:    p.suggestedCamera    || 'static',
+    panelType: p.panelType || 'bordered',
+    colorTag: p.colorTag || '#e8341a',
+    speechBubbles: p.speechBubbles || [],
+    contentZones: p.contentZones || [],
+    suggestedCamera: p.suggestedCamera || 'static',
     emotionalIntensity: p.emotionalIntensity || 0,
-    characterRegions:   p.characterRegions   || [],
+    characterRegions: p.characterRegions || [],
   };
 }
 
@@ -79,12 +79,12 @@ router.get('/chapter/:chapterId', verifyToken, async (req, res) => {
       Query.equal('chapterId', req.params.chapterId),
       Query.orderAsc('pageNumber')
     ]);
-    
+
     let manifests = mapList(response).map(parseManifest);
     // Remove detectedPanels to mimic lean response
     manifests = manifests.map(m => {
-        delete m.detectedPanels;
-        return m;
+      delete m.detectedPanels;
+      return m;
     });
 
     res.json({ success: true, data: manifests });
@@ -99,13 +99,13 @@ router.get('/chapter/:chapterId/status', verifyToken, async (req, res) => {
     const response = await databases.listDocuments(DB, PANEL_MANIFESTS, [
       Query.equal('chapterId', req.params.chapterId)
     ]);
-    
+
     const all = mapList(response);
 
-    const total     = all.length;
+    const total = all.length;
     const confirmed = all.filter(m => m.status === 'confirmed').length;
     const reviewing = all.filter(m => m.status === 'reviewing').length;
-    const pending   = all.filter(m => ['pending_detection','detecting','detected'].includes(m.status)).length;
+    const pending = all.filter(m => ['pending_detection', 'detecting', 'detected'].includes(m.status)).length;
 
     res.json({
       success: true,
@@ -124,14 +124,14 @@ router.get('/chapter/:chapterId/status', verifyToken, async (req, res) => {
 router.get('/:chapterId/:pageNumber', verifyToken, async (req, res) => {
   try {
     const response = await databases.listDocuments(DB, PANEL_MANIFESTS, [
-        Query.equal('chapterId', req.params.chapterId),
-        Query.equal('pageNumber', parseInt(req.params.pageNumber))
+      Query.equal('chapterId', req.params.chapterId),
+      Query.equal('pageNumber', parseInt(req.params.pageNumber))
     ]);
-    
+
     if (response.documents.length === 0) {
-        return res.status(404).json({ success: false, message: 'Manifest not found' });
+      return res.status(404).json({ success: false, message: 'Manifest not found' });
     }
-    
+
     let manifest = parseManifest(mapDoc(response.documents[0]));
     res.json({ success: true, data: manifest });
   } catch (err) {
@@ -154,11 +154,11 @@ router.post('/:chapterId/:pageNumber/detect-instant',
   ],
   async (req, res) => {
     if (validationGuard(req, res)) return;
-    
+
     try {
       const { imageUrl, imageWidth, imageHeight, readingDirection = 'ltr', artStyle = 'auto' } = req.body;
       const { chapterId, pageNumber } = req.params;
-      
+
       // Verify chapter exists and user has access
       const chapterDoc = await databases.getDocument(DB, CHAPTERS, chapterId);
       if (!chapterDoc) {
@@ -256,11 +256,11 @@ router.post('/:chapterId/:pageNumber/detect',
   ],
   async (req, res) => {
     if (validationGuard(req, res)) return;
-    
+
     try {
       const { imageUrl, imageWidth, imageHeight, readingDirection = 'ltr', artStyle = 'auto' } = req.body;
       const { chapterId, pageNumber } = req.params;
-      
+
       // Verify chapter exists and user has access
       const chapterDoc = await databases.getDocument(DB, CHAPTERS, chapterId);
       if (!chapterDoc) {
@@ -339,7 +339,7 @@ router.post('/:chapterId/:pageNumber/detect',
 // Save corrected panels
 router.put('/:chapterId/:pageNumber',
   verifyToken,
-  [ body('panels').isArray({ min: 0 }).withMessage('panels must be an array') ],
+  [body('panels').isArray({ min: 0 }).withMessage('panels must be an array')],
   async (req, res) => {
     if (validationGuard(req, res)) return;
     const { panels } = req.body;
@@ -349,7 +349,7 @@ router.put('/:chapterId/:pageNumber',
         Query.equal('chapterId', req.params.chapterId),
         Query.equal('pageNumber', parseInt(req.params.pageNumber))
       ]);
-      
+
       if (response.documents.length === 0) return res.status(404).json({ success: false, message: 'Manifest not found' });
       const manifest = response.documents[0];
 
@@ -365,8 +365,8 @@ router.put('/:chapterId/:pageNumber',
       normalised.sort((a, b) => a.readingOrder - b.readingOrder);
 
       const updated = await databases.updateDocument(DB, PANEL_MANIFESTS, manifest.$id, {
-          panels: JSON.stringify(normalised),
-          status: 'reviewing'
+        panels: JSON.stringify(normalised),
+        status: 'reviewing'
       });
 
       res.json({ success: true, data: parseManifest(mapDoc(updated)) });
@@ -380,17 +380,17 @@ router.put('/:chapterId/:pageNumber',
 router.post('/:chapterId/:pageNumber/confirm', verifyToken, async (req, res) => {
   try {
     const response = await databases.listDocuments(DB, PANEL_MANIFESTS, [
-        Query.equal('chapterId', req.params.chapterId),
-        Query.equal('pageNumber', parseInt(req.params.pageNumber))
+      Query.equal('chapterId', req.params.chapterId),
+      Query.equal('pageNumber', parseInt(req.params.pageNumber))
     ]);
-      
+
     if (response.documents.length === 0) return res.status(404).json({ success: false, message: 'Manifest not found' });
     const manifest = response.documents[0];
-    
+
     // Check if panels exist
     let panels = [];
     if (typeof manifest.panels === 'string') {
-        try { panels = JSON.parse(manifest.panels); } catch {}
+      try { panels = JSON.parse(manifest.panels); } catch { }
     }
 
     if (panels.length === 0) {
@@ -398,7 +398,7 @@ router.post('/:chapterId/:pageNumber/confirm', verifyToken, async (req, res) => 
     }
 
     const updated = await databases.updateDocument(DB, PANEL_MANIFESTS, manifest.$id, {
-        status: 'confirmed'
+      status: 'confirmed'
     });
 
     res.json({ success: true, data: { status: updated.status } });
@@ -413,7 +413,7 @@ router.post('/:chapterId/:pageNumber/confirm', verifyToken, async (req, res) => 
 router.get('/:manifestId/detection-status', verifyToken, async (req, res) => {
   try {
     const manifest = await databases.getDocument(DB, PANEL_MANIFESTS, req.params.manifestId);
-    
+
     res.json({
       success: true,
       data: {
@@ -436,7 +436,7 @@ router.post('/:chapterId/:pageNumber/detect-characters-instant',
   async (req, res) => {
     try {
       const { chapterId, pageNumber } = req.params;
-      
+
       // Verify ownership
       const chapterDoc = await databases.getDocument(DB, CHAPTERS, chapterId);
       const manga = await databases.getDocument(DB, MANGAS, chapterDoc.mangaId);
@@ -457,7 +457,7 @@ router.post('/:chapterId/:pageNumber/detect-characters-instant',
       const manifest = manifestRes.documents[0];
       const pageNum = parseInt(pageNumber);
       const panels = JSON.parse(manifest.panels || '[]');
-      
+
       const characterDetectionService = require('../services/characterDetectionService');
       const results = {};
 
@@ -473,7 +473,7 @@ router.post('/:chapterId/:pageNumber/detect-characters-instant',
           imageUrl: manifest.imageUrl,
           bbox: panel.bbox
         });
-        
+
         if (detection.success) {
           results[panel.panelId] = (detection.detectedCharacters || []).map(c => ({
             ...c,
@@ -491,7 +491,7 @@ router.post('/:chapterId/:pageNumber/detect-characters-instant',
       console.error('[Character Detection] Instant error:', err);
       res.status(500).json({ success: false, message: err.message });
     }
-});
+  });
 
 /**
  * DETECT CHARACTERS - Queue-based character detection
@@ -501,7 +501,7 @@ router.post('/:chapterId/:pageNumber/detect-characters',
   async (req, res) => {
     try {
       const { chapterId, pageNumber } = req.params;
-      
+
       // Verify ownership
       const chapterDoc = await databases.getDocument(DB, CHAPTERS, chapterId);
       const manga = await databases.getDocument(DB, MANGAS, chapterDoc.mangaId);
@@ -564,11 +564,11 @@ router.post('/:chapterId/:pageNumber/extract-text',
   ],
   async (req, res) => {
     if (validationGuard(req, res)) return;
-    
+
     try {
       const { chapterId, pageNumber } = req.params;
       const { language = 'eng' } = req.body;
-      
+
       // Verify ownership
       const chapterDoc = await databases.getDocument(DB, CHAPTERS, chapterId);
       const manga = await databases.getDocument(DB, MANGAS, chapterDoc.mangaId);
@@ -632,7 +632,7 @@ router.post('/:chapterId/:pageNumber/generate-voices',
   async (req, res) => {
     try {
       const { chapterId, pageNumber } = req.params;
-      
+
       // Verify ownership
       const chapterDoc = await databases.getDocument(DB, CHAPTERS, chapterId);
       const manga = await databases.getDocument(DB, MANGAS, chapterDoc.mangaId);
@@ -698,7 +698,7 @@ router.put('/:chapterId/:pageNumber/assign-character',
   ],
   async (req, res) => {
     if (validationGuard(req, res)) return;
-    
+
     try {
       const { chapterId, pageNumber } = req.params;
       const { bubbleId, characterId } = req.body;
@@ -763,11 +763,11 @@ router.post('/:chapterId/:pageNumber/reset', verifyToken, async (req, res) => {
       Query.equal('chapterId', req.params.chapterId),
       Query.equal('pageNumber', parseInt(req.params.pageNumber))
     ]);
-      
+
     if (response.documents.length === 0) {
       return res.status(404).json({ success: false, message: 'No detection data found' });
     }
-    
+
     const manifest = response.documents[0];
 
     const updated = await databases.updateDocument(DB, PANEL_MANIFESTS, manifest.$id, {

@@ -21,6 +21,16 @@ router.get('/:id', async (req, res) => {
     try {
       const mangaDoc = await databases.getDocument(DB, MANGAS, chapter.mangaId);
       let manga = mapDoc(mangaDoc);
+
+      try {
+        const chaptersRes = await databases.listDocuments(DB, CHAPTERS, [
+          Query.equal('mangaId', manga._id),
+          Query.orderAsc('chapterNumber')
+        ]);
+        manga.chapters = chaptersRes.documents.map(mapDoc);
+      } catch (err) {
+        manga.chapters = [];
+      }
       
       // Populate author
       try {
@@ -39,6 +49,14 @@ router.get('/:id', async (req, res) => {
     // Increment views
     await databases.updateDocument(DB, CHAPTERS, chapter._id, { views: (chapter.views || 0) + 1 });
     
+    if (typeof chapter.pages === 'string') {
+      try {
+        chapter.pages = JSON.parse(chapter.pages);
+      } catch (e) {
+        chapter.pages = [];
+      }
+    }
+
     res.json({ success: true, chapter });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

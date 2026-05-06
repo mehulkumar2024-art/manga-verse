@@ -147,8 +147,8 @@ export default function AutoplayReader({
     );
   }
 
-  const panelVariant = readingDirection === 'rtl' 
-    ? panelAnimations.slideInRight 
+  const panelVariant = readingDirection === 'rtl'
+    ? panelAnimations.slideInRight
     : panelAnimations.slideInLeft;
 
   return (

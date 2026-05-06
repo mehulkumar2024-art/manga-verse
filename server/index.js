@@ -12,14 +12,47 @@ const characterRoutes = require('./routes/characters');
 
 const app = express();
 
-// Middleware
+// Security & CORS Headers
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: process.env.CLIENT_URL || ['http://localhost:5173', 'http://localhost:5174'],
   credentials: true
 }));
+
+// Content Security Policy - Allow Appwrite and necessary resources
+app.use((req, res, next) => {
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' http://localhost:* https://*.appwrite.io https://sgp.cloud.appwrite.io; frame-ancestors 'none';"
+  );
+  next();
+});
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(morgan('dev'));
+
+// Welcome route
+app.get('/', (req, res) => {
+  res.json({
+    status: 'running',
+    message: 'MangaVerse API - Powered by Appwrite',
+    version: '1.0.0',
+    endpoints: {
+      health: '/api/health',
+      auth: '/api/auth',
+      manga: '/api/manga',
+      chapters: '/api/chapters',
+      panels: '/api/panels',
+      characters: '/api/characters',
+      users: '/api/users'
+    }
+  });
+});
+
+// Chrome DevTools compatibility
+app.get('/.well-known/appspecific/com.chrome.devtools.json', (req, res) => {
+  res.json({ installed_version: '1.0' });
+});
 
 // Routes
 app.use('/api/auth', authRoutes);

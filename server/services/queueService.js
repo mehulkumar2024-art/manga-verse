@@ -1,62 +1,82 @@
 const Queue = require('bull');
-const redis = require('redis');
 
 // Redis connection with fallback for development
-let redisClient = null;
-let useRedis = true;
+let useRedis = false; // Default to false, enable only if Redis is available
+let redisConnected = false;
 
-const redisConfig = {
-  host: process.env.REDIS_HOST || 'localhost',
-  port: process.env.REDIS_PORT || 6379,
-  password: process.env.REDIS_PASSWORD || undefined,
-  retryStrategy: (times) => {
-    if (times > 3) {
-      if (useRedis) {
-        console.warn('⚠️  Redis connection failed - Falling back to in-memory queue');
-        useRedis = false;
-      }
-      return null; // Stop retrying
-    }
-    return Math.min(times * 100, 3000);
-  },
+// Try to detect Redis availability asynchronously
+const checkRedisAvailability = async () => {
+  try {
+    const redis = require('redis');
+    const client = redis.createClient({
+      host: process.env.REDIS_HOST || 'localhost',
+      port: process.env.REDIS_PORT || 6379,
+      password: process.env.REDIS_PASSWORD || undefined,
+      socket: { reconnectStrategy: () => null },
+      commandsQueueMaxLen: 0,
+    });
+
+    // Try to ping with timeout
+    const pingPromise = new Promise((resolve) => {
+      setTimeout(() => resolve(false), 2000); // 2 second timeout
+    });
+
+    client.on('error', () => {
+      redisConnected = false;
+    });
+
+    client.on('connect', () => {
+      redisConnected = true;
+      useRedis = true;
+      console.log('✓ Redis connected for job queues');
+      client.disconnect();
+    });
+
+    client.connect().catch(() => {
+      redisConnected = false;
+    });
+
+    await pingPromise;
+  } catch (err) {
+    redisConnected = false;
+  }
+
+  if (!redisConnected) {
+    console.warn('⚠️  Redis not available - Using in-memory queues for development');
+  }
 };
 
-try {
-  redisClient = redis.createClient(redisConfig);
-
-  redisClient.on('error', (err) => {
-    if (useRedis && process.env.NODE_ENV !== 'production') {
-      // Only log once to avoid spam
-      console.warn('ℹ️  Redis not detected. Using in-memory fallback for queues.');
-      useRedis = false;
-    }
-  });
-  
-  redisClient.on('connect', () => {
-    useRedis = true;
-    console.log('✓ Redis connected');
-  });
-} catch (err) {
-  useRedis = false;
-}
+// Start checking Redis availability immediately but don't block
+checkRedisAvailability().catch(() => {
+  console.warn('⚠️  Redis check failed - Using in-memory queues');
+});
 
 
-// Create job queues
-const panelDetectionQueue = useRedis ? new Queue('panel-detection', {
-  redis: { host: process.env.REDIS_HOST || 'localhost', port: process.env.REDIS_PORT || 6379 }
-}) : createInMemoryQueue('panel-detection');
+// Create job queues with in-memory fallback
+const createQueues = () => {
+  const panelDetectionQueue = useRedis ? new Queue('panel-detection', {
+    redis: { host: process.env.REDIS_HOST || 'localhost', port: process.env.REDIS_PORT || 6379 }
+  }) : createInMemoryQueue('panel-detection');
 
-const characterDetectionQueue = useRedis ? new Queue('character-detection', {
-  redis: { host: process.env.REDIS_HOST || 'localhost', port: process.env.REDIS_PORT || 6379 }
-}) : createInMemoryQueue('character-detection');
+  const characterDetectionQueue = useRedis ? new Queue('character-detection', {
+    redis: { host: process.env.REDIS_HOST || 'localhost', port: process.env.REDIS_PORT || 6379 }
+  }) : createInMemoryQueue('character-detection');
 
-const ocrQueue = useRedis ? new Queue('ocr-processing', {
-  redis: { host: process.env.REDIS_HOST || 'localhost', port: process.env.REDIS_PORT || 6379 }
-}) : createInMemoryQueue('ocr-processing');
+  const ocrQueue = useRedis ? new Queue('ocr-processing', {
+    redis: { host: process.env.REDIS_HOST || 'localhost', port: process.env.REDIS_PORT || 6379 }
+  }) : createInMemoryQueue('ocr-processing');
 
-const ttsQueue = useRedis ? new Queue('tts-generation', {
-  redis: { host: process.env.REDIS_HOST || 'localhost', port: process.env.REDIS_PORT || 6379 }
-}) : createInMemoryQueue('tts-generation');
+  const ttsQueue = useRedis ? new Queue('tts-generation', {
+    redis: { host: process.env.REDIS_HOST || 'localhost', port: process.env.REDIS_PORT || 6379 }
+  }) : createInMemoryQueue('tts-generation');
+
+  return { panelDetectionQueue, characterDetectionQueue, ocrQueue, ttsQueue };
+};
+
+let panelDetectionQueue = createInMemoryQueue('panel-detection');
+let characterDetectionQueue = createInMemoryQueue('character-detection');
+let ocrQueue = createInMemoryQueue('ocr-processing');
+let ttsQueue = createInMemoryQueue('tts-generation');
 
 // In-memory queue fallback for development
 function createInMemoryQueue(name) {
@@ -104,78 +124,69 @@ function createInMemoryQueue(name) {
   };
 }
 
-// Job processors
-panelDetectionQueue.process(async (job) => {
-  const panelDetectionService = require('./panelDetectionService');
-  return await panelDetectionService.detectPanels(job.data);
-});
-
-characterDetectionQueue.process(async (job) => {
-  const characterDetectionService = require('./characterDetectionService');
-  return await characterDetectionService.detectCharacters(job.data);
-});
-
-ocrQueue.process(async (job) => {
-  const ocrService = require('./ocrService');
-  return await ocrService.extractText(job.data);
-});
-
-ttsQueue.process(async (job) => {
-  const ttsService = require('./ttsService');
-  return await ttsService.generateVoice(job.data);
-});
-
-// Queue event handlers with database persistence
-const setupQueueListeners = (queue, queueName) => {
-  queue.on('active', (job) => {
-    console.log(`[${queueName}] Job ${job.id} started`);
-  });
-
-  queue.on('completed', async (job) => {
-    console.log(`[${queueName}] Job ${job.id} completed`);
-    
-    // Save results to database based on queue type
+// Job processors (with safe requires)
+try {
+  panelDetectionQueue.process?.(async (job) => {
     try {
-      const { databases } = require('../config/appwrite');
-      const DB = 'mangaverse';
-      const PANEL_MANIFESTS = 'panel_manifests';
-      
-      if (queueName === 'Panel Detection' && job.returnvalue) {
-        const result = job.returnvalue;
-        await databases.updateDocument(DB, PANEL_MANIFESTS, result.manifestId, {
-          detectedPanels: JSON.stringify(result.panels),
-          status: 'detected',
-          detectionConfidence: result.confidence,
-          detectionMethod: result.method
-        });
-        console.log(`✓ Saved ${result.panels.length} detected panels to manifest ${result.manifestId}`);
-      }
+      const panelDetectionService = require('./panelDetectionService');
+      return await panelDetectionService.detectPanels(job.data);
     } catch (err) {
-      console.error(`[${queueName}] Failed to save results:`, err.message);
+      console.error('[Panel Detection] Process error:', err.message);
+      throw err;
     }
   });
+} catch (err) {
+  console.warn('[Panel Detection] Processor setup skipped (using in-memory queue)');
+}
 
-  queue.on('failed', (job, err) => {
-    if (useRedis) console.error(`[${queueName}] Job ${job.id} failed:`, err.message);
+try {
+  characterDetectionQueue.process?.(async (job) => {
+    try {
+      const characterDetectionService = require('./characterDetectionService');
+      return await characterDetectionService.detectCharacters(job.data);
+    } catch (err) {
+      console.error('[Character Detection] Process error:', err.message);
+      throw err;
+    }
   });
+} catch (err) {
+  console.warn('[Character Detection] Processor setup skipped (using in-memory queue)');
+}
 
-  queue.on('error', (err) => {
-    if (useRedis) console.error(`[${queueName}] Queue error:`, err);
+try {
+  ocrQueue.process?.(async (job) => {
+    try {
+      const ocrService = require('./ocrService');
+      return await ocrService.extractText(job.data);
+    } catch (err) {
+      console.error('[OCR] Process error:', err.message);
+      throw err;
+    }
   });
-};
+} catch (err) {
+  console.warn('[OCR] Processor setup skipped (using in-memory queue)');
+}
 
-
-setupQueueListeners(panelDetectionQueue, 'Panel Detection');
-setupQueueListeners(characterDetectionQueue, 'Character Detection');
-setupQueueListeners(ocrQueue, 'OCR');
-setupQueueListeners(ttsQueue, 'TTS');
+try {
+  ttsQueue.process?.(async (job) => {
+    try {
+      const ttsService = require('./ttsService');
+      return await ttsService.generateVoice(job.data);
+    } catch (err) {
+      console.error('[TTS] Process error:', err.message);
+      throw err;
+    }
+  });
+} catch (err) {
+  console.warn('[TTS] Processor setup skipped (using in-memory queue)');
+}
 
 module.exports = {
   panelDetectionQueue,
   characterDetectionQueue,
   ocrQueue,
   ttsQueue,
-  redisClient,
+  redisClient: null, // Not used with in-memory queues
   // Helper functions
   async addPanelDetection(data) {
     return await panelDetectionQueue.add(data, { 

@@ -6,6 +6,19 @@ import { MdOutlineMenuBook } from 'react-icons/md';
 import api from '../config/api';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
+import React from 'react';
+import CroppedImage from '../components/PanelEditor/CroppedImage';
+import { speakText } from '../services/ttsClient';
+
+const VOICE_LIBRARY = [
+  { id: 'v1', name: 'Kaelen', gender: 'Male', age: 'Adult', style: 'Action / Heroic', preview: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3' },
+  { id: 'v2', name: 'Elora', gender: 'Female', age: 'Adult', style: 'Sweet / Friendly', preview: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3' },
+  { id: 'v3', name: 'Borg', gender: 'Male', age: 'Large', style: 'Deep / Gritty', preview: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3' },
+  { id: 'v4', name: 'Mira', gender: 'Female', age: 'Young', style: 'High-pitched / Energetic', preview: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3' },
+  { id: 'v5', name: 'The Narrator', gender: 'Male', age: 'Old', style: 'Deep / Dramatic', preview: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3' },
+  { id: 'v6', name: 'Zoe', gender: 'Female', age: 'Young', style: 'Cute / Playful', preview: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3' },
+  { id: 'v7', name: 'Commander', gender: 'Male', age: 'Adult', style: 'Authoritative', preview: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3' },
+];
 
 export default function Reader() {
   const { mangaId, chapterId } = useParams();
@@ -24,22 +37,29 @@ export default function Reader() {
   const [showUI, setShowUI] = useState(true);
   const [currentPage, setCurrentPage] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [characters, setCharacters] = useState([]);
+  const [currentText, setCurrentText] = useState('');
+  const [showSubtitle, setShowSubtitle] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const audioRef = React.useRef(null);
 
   useEffect(() => {
     const fetch = async () => {
       setLoading(true);
       try {
-        const [chapterRes, commentsRes, manifestRes] = await Promise.all([
+        const [chapterRes, commentsRes, manifestRes, charsRes] = await Promise.all([
           api.get(`/chapters/${chapterId}`),
           api.get(`/manga/${mangaId}/comments`, { params: { chapterId } }),
           api.get(`/panels/chapter/${chapterId}`),
+          api.get(`/characters/manga/${mangaId}`)
         ]);
         setChapter(chapterRes.data.chapter);
         const m = chapterRes.data.chapter.manga;
         setManga(m);
-        setAllChapters(m.chapters || []);
+        setAllChapters(m?.chapters || []);
         setComments(commentsRes.data.comments || []);
-        setManifests(manifestRes.data || []);
+        setManifests(manifestRes.data.data || []);
+        setCharacters(charsRes.data.data || []);
         setCurrentPage(0);
         setCurrentPanelIndex(-1);
       } catch { navigate(`/manga/${mangaId}`); }
@@ -76,6 +96,11 @@ export default function Reader() {
   }, [chapter, readMode, isCinematic, currentPanelIndex, manifests, currentPage]);
 
   const advanceCinematic = useCallback(() => {
+    // If speaking, we probably shouldn't advance unless it's been long enough.
+    // For now we just advance and clear the subtitle.
+    setShowSubtitle(false);
+    setCurrentText('');
+    
     const currentManifest = manifests.find(m => m.pageNumber === currentPage + 1);
     const panels = currentManifest?.panels || [];
 
@@ -99,6 +124,9 @@ export default function Reader() {
   }, [manifests, currentPage, currentPanelIndex, chapter, nextChapter]);
 
   const reverseCinematic = useCallback(() => {
+    setShowSubtitle(false);
+    setCurrentText('');
+    
     if (currentPanelIndex > -1) {
       setCurrentPanelIndex(prev => prev - 1);
     } else {
@@ -113,11 +141,11 @@ export default function Reader() {
 
   useEffect(() => {
     let timer;
-    if (isCinematic && currentPanelIndex !== -2) { // -2 would be paused
-      timer = setInterval(advanceCinematic, 4000); // Auto-advance every 4s
+    if (isCinematic && currentPanelIndex !== -2 && !isSpeaking) { // -2 would be paused
+      timer = setInterval(advanceCinematic, 4000); // Auto-advance every 4s if not speaking
     }
     return () => clearInterval(timer);
-  }, [isCinematic, currentPanelIndex, advanceCinematic]);
+  }, [isCinematic, currentPanelIndex, advanceCinematic, isSpeaking]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -142,6 +170,92 @@ export default function Reader() {
     }
   };
 
+  useEffect(() => {
+    if (isCinematic && currentPanelIndex >= 0) {
+      const manifest = manifests.find(m => m.pageNumber === currentPage + 1);
+      const panel = manifest?.panels?.[currentPanelIndex];
+      
+      // Stop any ongoing speech when panel changes
+      window.speechSynthesis.cancel();
+      setShowSubtitle(false);
+      setCurrentText('');
+      setIsSpeaking(false);
+      
+      if (panel && panel.characterRegions && panel.characterRegions.length > 0) {
+        // Find the first region that actually has an assigned character AND text
+        const validRegion = panel.characterRegions.find(r => r && r.characterId && r.text);
+        
+        if (validRegion) {
+          const charId = validRegion.characterId;
+          const character = characters.find(c => c._id === charId);
+          const textToSpeak = validRegion.text;
+          
+          if (character) {
+            // Show text after a tiny delay for visual pacing
+            setTimeout(() => {
+              setCurrentText(textToSpeak);
+              setShowSubtitle(true);
+              
+              let speed = 1.0;
+              let pitch = 1.0;
+              let voiceType = 'male_adult';
+              
+              if (character.voiceType) {
+                if (character.voiceType.startsWith('{')) {
+                  try {
+                    const parsed = JSON.parse(character.voiceType);
+                    if (parsed.speed) speed = parsed.speed;
+                    if (parsed.pitch) pitch = parsed.pitch;
+                    if (parsed.type) voiceType = parsed.type;
+                  } catch (e) {}
+                } else {
+                  voiceType = character.voiceType;
+                }
+              }
+              
+              setIsSpeaking(true);
+              speakText(textToSpeak, { voiceType, rate: speed, pitch, volume: 1.0 })
+                .then(() => {
+                  // Only advance if we haven't manually changed panels
+                  setIsSpeaking(false);
+                  advanceCinematic();
+                })
+                .catch(err => {
+                  console.log('TTS Error:', err);
+                  setIsSpeaking(false);
+                });
+                
+            }, 600); // Wait 600ms after panel appears to start speaking
+          }
+        } else {
+          // Fallback if no text, just play preview voice like before?
+          const voiceRegion = panel.characterRegions.find(r => r && r.characterId);
+          if (voiceRegion) {
+            const charId = voiceRegion.characterId;
+            const character = characters.find(c => c._id === charId);
+            if (character && character.voiceId) {
+              const voice = VOICE_LIBRARY.find(v => v.id === character.voiceId);
+              if (voice && audioRef.current) {
+                let speed = 1.0;
+                if (character.voiceType && character.voiceType.startsWith('{')) {
+                  try {
+                    const parsed = JSON.parse(character.voiceType);
+                    if (parsed.speed) speed = parsed.speed;
+                  } catch (e) {}
+                }
+                audioRef.current.pause();
+                audioRef.current.src = voice.preview;
+                audioRef.current.playbackRate = speed;
+                audioRef.current.preservesPitch = false;
+                audioRef.current.play().catch(e => console.log('Audio play failed', e));
+              }
+            }
+          }
+        }
+      }
+    }
+  }, [currentPanelIndex, isCinematic, currentPage, manifests, characters]);
+
   if (loading) return (
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
       <div className="spinner" />
@@ -149,11 +263,14 @@ export default function Reader() {
   );
   if (!chapter) return null;
 
-  const pages = chapter.pages || [];
+  const pages = chapter?.pages || [];
   const totalPages = pages.length;
+
+
 
   return (
     <div style={{ minHeight: '100vh', background: '#0a0a0f', position: 'relative', margin: '-28px -24px', padding: 0 }}>
+      <audio ref={audioRef} />
       {/* Immersive Manga BG Overlay */}
       <div style={{
         position: 'absolute', inset: 0,
@@ -302,35 +419,45 @@ export default function Reader() {
           /* Page mode */
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', overflow: 'hidden' }}>
             {pages[currentPage] && (
-              <div style={{ position: 'relative', maxWidth: 900, width: '100%', overflow: 'hidden' }}>
-                <motion.img
-                  key={currentPage}
-                  initial={{ opacity: 0 }}
-                  animate={(() => {
-                    const manifest = manifests.find(m => m.pageNumber === currentPage + 1);
-                    const panel = manifest?.panels?.[currentPanelIndex];
-                    if (isCinematic && panel) {
-                      const { x, y, h, w } = panel.bbox;
-                      const iw = manifest.imageWidth;
-                      const ih = manifest.imageHeight;
-                      const scale = Math.min(900 / w, window.innerHeight / h) * 0.8;
-                      const tx = (iw / 2 - (x + w / 2)) * scale;
-                      const ty = (ih / 2 - (y + h / 2)) * scale;
-                      return {
-                        opacity: 1,
-                        scale,
-                        x: tx,
-                        y: ty,
-                        transition: { duration: 1.5, ease: "easeInOut" }
-                      };
-                    }
-                    return { opacity: 1, scale: 1, x: 0, y: 0 };
-                  })()}
-                  src={pages[currentPage].url}
-                  alt={`Page ${currentPage + 1}`}
-                  style={{ width: '100%', display: 'block', userSelect: 'none', transformOrigin: 'center center' }}
-                  onClick={e => e.stopPropagation()}
-                />
+              <div style={{ position: 'relative', maxWidth: 900, width: '100%', overflow: 'hidden', display: 'flex', justifyContent: 'center' }}>
+                {(() => {
+                  const manifest = manifests.find(m => m.pageNumber === currentPage + 1);
+                  const panel = manifest?.panels?.[currentPanelIndex];
+
+                  if (isCinematic && panel) {
+                    const { x, y, w, h } = panel.bbox;
+                    return (
+                      <motion.div
+                        key={`panel-${panel.panelId}`}
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.5 }}
+                        style={{ width: '100%', height: '80vh', display: 'flex', justifyContent: 'center' }}
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <CroppedImage
+                          imageUrl={pages[currentPage].url}
+                          bbox={{ x, y, w, h }}
+                          style={{ height: '100%', width: 'auto', maxHeight: '100%' }}
+                        />
+                      </motion.div>
+                    );
+                  }
+
+                  // Default full page
+                  return (
+                    <motion.img
+                      key={`page-${currentPage}`}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      src={pages[currentPage].url}
+                      alt={`Page ${currentPage + 1}`}
+                      style={{ width: '100%', display: 'block', userSelect: 'none' }}
+                      onClick={e => e.stopPropagation()}
+                    />
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -349,6 +476,27 @@ export default function Reader() {
           </div>
         )}
       </div>
+
+      {/* Cinematic Text Subtitle */}
+      <AnimatePresence>
+        {isCinematic && showSubtitle && currentText && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 10 }}
+            style={{
+              position: 'fixed', bottom: 100, left: '50%', transform: 'translateX(-50%)',
+              zIndex: 110, maxWidth: '80%', background: 'rgba(10,10,15,0.85)', backdropFilter: 'blur(10px)',
+              padding: '16px 24px', borderRadius: 12, border: '1px solid #35353f',
+              color: 'white', fontSize: 18, fontWeight: 500, fontFamily: 'DM Sans, sans-serif',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.5)', textAlign: 'center', pointerEvents: 'none',
+              letterSpacing: 0.5, lineHeight: 1.4
+            }}
+          >
+            {currentText}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Comments */}
       <div style={{ position: 'relative', zIndex: 1, maxWidth: 920, margin: '0 auto', padding: '20px 20px 120px' }}>

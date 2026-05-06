@@ -26,7 +26,6 @@ export default function Upload() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [selectedGenres, setSelectedGenres] = useState([]);
-  const [status, setStatus] = useState('Ongoing');
   const [coverFile, setCoverFile] = useState(null);
   const [coverPreview, setCoverPreview] = useState(null);
 
@@ -76,7 +75,7 @@ export default function Upload() {
       const formData = new FormData();
       formData.append('title', title);
       formData.append('description', description);
-      formData.append('status', status);
+      formData.append('status', 'Draft');
       formData.append('genres', JSON.stringify(selectedGenres));
       formData.append('cover', coverFile);
 
@@ -267,21 +266,7 @@ export default function Upload() {
               <p style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginTop: 4 }}>{description.length}/2000</p>
             </div>
 
-            {/* Status */}
-            <div style={{ marginBottom: 20 }}>
-              <label style={labelSt}>Status</label>
-              <div style={{ display: 'flex', gap: 10 }}>
-                {STATUS.map(s => (
-                  <button key={s} type="button"
-                    onClick={() => setStatus(s)}
-                    className={`btn ${status === s ? 'btn-primary' : 'btn-ghost'}`}
-                    style={{ fontSize: '0.85rem' }}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
+            {/* Status (Removed, defaults to Draft) */}
 
             {/* Genres */}
             <div style={{ marginBottom: 28 }}>

@@ -4,7 +4,7 @@ const router    = express.Router();
 const { body, validationResult } = require('express-validator');
 const { ID, Query } = require('node-appwrite');
 const { databases } = require('../config/appwrite');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, optionalAuth } = require('../middleware/auth');
 const { mapDoc, mapList } = require('../utils/appwriteMapper');
 
 const DB = 'mangaverse';
@@ -18,7 +18,7 @@ function vGuard(req, res) {
 }
 
 // ── GET all characters for a manga ──────────────────────────────
-router.get('/manga/:mangaId', verifyToken, async (req, res) => {
+router.get('/manga/:mangaId', optionalAuth, async (req, res) => {
   try {
     const response = await databases.listDocuments(DB, CHARACTERS, [
       Query.equal('mangaId', req.params.mangaId),
